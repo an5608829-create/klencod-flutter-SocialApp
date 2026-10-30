@@ -45,7 +45,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
     try {
       User? currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser == null) {
-        // تسجيل دخول تلقائي بدون إزعاج المستخدم بشاشات إيميل وباسورد
         UserCredential userCredential = await FirebaseAuth.instance.signInAnonymously();
         currentUser = userCredential.user;
       }
@@ -68,7 +67,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
       return const Scaffold(body: Center(child: Text('فشل الاتصال بالخدمة')));
     }
 
-    // التحقق هل قام المستخدم بتسجيل رقمه واسم اليوزر مسبقاً في قاعدة البيانات أم لا
     return FutureBuilder<DocumentSnapshot>(
       future: FirebaseFirestore.instance.collection('users').doc(_user!.uid).get(),
       builder: (context, snapshot) {
@@ -114,7 +112,6 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // التحقق هل رقم التليفون مستخدم من قبل
       final phoneQuery = await FirebaseFirestore.instance
           .collection('users')
           .where('phone', isEqualTo: phone)
@@ -249,7 +246,7 @@ class SearchUserScreen extends StatefulWidget {
 
 class _SearchUserScreenState extends State<SearchUserScreen> {
   final _searchController = TextEditingController();
-  Map<String, dynamic> যন্ত্রResult = {};
+  Map<String, dynamic> searchResult = {};
   bool _searched = false;
   bool _loading = false;
 
@@ -271,9 +268,9 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
       _loading = false;
       _searched = true;
       if (query.docs.isNotEmpty) {
-         যন্ত্রResult = query.docs.first.data();
+        searchResult = query.docs.first.data();
       } else {
-         যন্ত্রResult = {};
+        searchResult = {};
       }
     });
   }
@@ -311,23 +308,23 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
             _loading
                 ? const CircularProgressIndicator()
                 : _searched
-                    ? যন্ত্রResult.isEmpty
+                    ? searchResult.isEmpty
                         ? const Text('لم يتم العثور على مستخدم بهذا الرقم', style: TextStyle(color: Colors.red))
-                        : যন্ত্রResult['uid'] == currentUserId
+                        : searchResult['uid'] == currentUserId
                             ? const Text('هذا هو رقمك الشخصي!', style: TextStyle(color: Colors.grey))
                             : Card(
                                 child: ListTile(
                                   leading: const Icon(Icons.person, size: 40, color: Colors.blue),
-                                  title: Text( যন্ত্রResult['username']),
-                                  subtitle: Text( যন্ত্রResult['phone']),
+                                  title: Text(searchResult['username']),
+                                  subtitle: Text(searchResult['phone']),
                                   trailing: ElevatedButton(
                                     onPressed: () {
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
                                           builder: (context) => ChatScreen(
-                                            peerUid:  যন্ত্রResult['uid'],
-                                            peerUsername:  যন্ত্রResult['username'],
+                                            peerUid: searchResult['uid'],
+                                            peerUsername: searchResult['username'],
                                           ),
                                         ),
                                       );
