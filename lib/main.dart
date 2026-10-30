@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 void main() async {
@@ -24,105 +23,54 @@ class SocialApp extends StatelessWidget {
   }
 }
 
-/// التحقق من حالة تسجيل الدخول
-class AuthWrapper extends StatelessWidget {
+/// 1. فحص الحالة: تسجيل دخول تلقائي مجهول في الخلفية ثم التحقق من إدخال الرقم واليوزر
+class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        }
-        if (snapshot.hasData) {
-          return UsernameCheckScreen(user: snapshot.data!);
-        }
-        return const LoginScreen();
-      },
-    );
-  }
+  State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
-/// شاشة تسجيل الدخول بجوجل
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+class _AuthWrapperState extends State<AuthWrapper> {
+  bool _isLoading = true;
+  User? _user;
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
-}
+  void initState() {
+    super.initState();
+    _initAnonymousAuth();
+  }
 
-class _LoginScreenState extends State<LoginScreen> {
-  bool _isLoading = false;
-
-  Future<void> _signInWithGoogle(BuildContext context) async {
-    setState(() => _isLoading = true);
+  Future<void> _initAnonymousAuth() async {
     try {
-      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) {
-        setState(() => _isLoading = false);
-        return;
+      User? currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        // تسجيل دخول تلقائي بدون إزعاج المستخدم بشاشات إيميل وباسورد
+        UserCredential userCredential = await FirebaseAuth.instance.signInAnonymously();
+        currentUser = userCredential.user;
       }
-
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-      final OAuthCredential credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      await FirebaseAuth.instance.signInWithCredential(credential);
+      setState(() {
+        _user = currentUser;
+        _isLoading = false;
+      });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('فشل تسجيل الدخول: $e')),
-      );
       setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.chat_bubble_outline, size: 80, color: Colors.blue),
-              const SizedBox(height: 20),
-              const Text(
-                'أهلاً بك في تطبيق التواصل',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 40),
-              _isLoading
-                  ? const CircularProgressIndicator()
-                  : ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      ),
-                      onPressed: () => _signInWithGoogle(context),
-                      icon: const Icon(Icons.login),
-                      label: const Text('تسجيل الدخول باستخدام جوجل', style: TextStyle(fontSize: 16)),
-                    ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+    if (_isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
 
-/// التحقق مما إذا كان المستخدم قد اختار اسم يوزر أم لا
-class UsernameCheckScreen extends StatelessWidget {
-  final User user;
-  const UsernameCheckScreen({super.key, required this.user});
+    if (_user == null) {
+      return const Scaffold(body: Center(child: Text('فشل الاتصال بالخدمة')));
+    }
 
-  @override
-  Widget build(BuildContext context) {
+    // التحقق هل قام المستخدم بتسجيل رقمه واسم اليوزر مسبقاً في قاعدة البيانات أم لا
     return FutureBuilder<DocumentSnapshot>(
-      future: FirebaseFirestore.instance.collection('users').doc(user.uid).get(),
+      future: FirebaseFirestore.instance.collection('users').doc(_user!.uid).get(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -131,41 +79,50 @@ class UsernameCheckScreen extends StatelessWidget {
         if (snapshot.hasData && snapshot.data!.exists) {
           return HomeScreen(userData: snapshot.data!.data() as Map<String, dynamic>);
         } else {
-          return CreateUsernameScreen(user: user);
+          return RegisterProfileScreen(user: _user!);
         }
       },
     );
   }
 }
 
-/// شاشة اختيار اسم المستخدم (Username) لأول مرة
-class CreateUsernameScreen extends StatefulWidget {
+/// 2. شاشة تسجيل البيانات لأول مرة (رقم التليفون واسم اليوزر)
+class RegisterProfileScreen extends StatefulWidget {
   final User user;
-  const CreateUsernameScreen({super.key, required this.user});
+  const RegisterProfileScreen({super.key, required this.user});
 
   @override
-  State<CreateUsernameScreen> createState() => _CreateUsernameScreenState();
+  State<RegisterProfileScreen> createState() => _RegisterProfileScreenState();
 }
 
-class _CreateUsernameScreenState extends State<CreateUsernameScreen> {
+class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
+  final _phoneController = TextEditingController();
   final _usernameController = TextEditingController();
   bool _isLoading = false;
 
-  Future<void> _saveUsername() async {
+  Future<void> _saveProfile() async {
+    String phone = _phoneController.text.trim();
     String username = _usernameController.text.trim();
-    if (username.isEmpty) return;
+
+    if (phone.isEmpty || username.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('من فضلك ادخل رقم التليفون واسم المستخدم')),
+      );
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
-      final query = await FirebaseFirestore.instance
+      // التحقق هل رقم التليفون مستخدم من قبل
+      final phoneQuery = await FirebaseFirestore.instance
           .collection('users')
-          .where('username', isEqualTo: username)
+          .where('phone', isEqualTo: phone)
           .get();
 
-      if (query.docs.isNotEmpty) {
+      if (phoneQuery.docs.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('اسم المستخدم هذا مستخدم بالفعل، اختر اسمًا آخر.')),
+          const SnackBar(content: Text('رقم التليفون هذا مستخدم بالفعل.')),
         );
         setState(() => _isLoading = false);
         return;
@@ -173,10 +130,8 @@ class _CreateUsernameScreenState extends State<CreateUsernameScreen> {
 
       Map<String, dynamic> userData = {
         'uid': widget.user.uid,
-        'email': widget.user.email ?? '',
-        'displayName': widget.user.displayName ?? '',
+        'phone': phone,
         'username': username,
-        'photoUrl': widget.user.photoURL ?? '',
         'createdAt': Timestamp.now(),
       };
 
@@ -197,18 +152,27 @@ class _CreateUsernameScreenState extends State<CreateUsernameScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('اختر اسم المستخدم')),
+      appBar: AppBar(title: const Text('إعداد الملف الشخصي')),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Text(
-              'أهلاً بك! من فضلك أدخل اسم المستخدم (Username) الخاص بك:',
+              'أهلاً بك! أدخل رقم هاتفك واسم المستخدم للبدء فوراً:',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16),
             ),
             const SizedBox(height: 20),
+            TextField(
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'رقم الهاتف (مثال: 012xxxxxxxx)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 15),
             TextField(
               controller: _usernameController,
               decoration: const InputDecoration(
@@ -220,8 +184,8 @@ class _CreateUsernameScreenState extends State<CreateUsernameScreen> {
             _isLoading
                 ? const CircularProgressIndicator()
                 : ElevatedButton(
-                    onPressed: _saveUsername,
-                    child: const Text('حفظ والمتابعة'),
+                    onPressed: _saveProfile,
+                    child: const Text('دخول إلى التطبيق'),
                   ),
           ],
         ),
@@ -230,7 +194,7 @@ class _CreateUsernameScreenState extends State<CreateUsernameScreen> {
   }
 }
 
-/// الشاشة الرئيسية للملف الشخصي والوصول لقائمة المستخدمين
+/// 3. الشاشة الرئيسية وإمكانية البحث عن شخص برقم هاتفه
 class HomeScreen extends StatelessWidget {
   final Map<String, dynamic> userData;
   const HomeScreen({super.key, required this.userData});
@@ -240,48 +204,139 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text('مرحباً, @${userData['username']}'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await GoogleSignIn().signOut();
-              await FirebaseAuth.instance.signOut();
-            },
-          ),
-        ],
       ),
       body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.chat_bubble, size: 80, color: Colors.blue),
+              const SizedBox(height: 20),
+              Text(
+                'رقم هاتفك: ${userData['phone']}',
+                style: const TextStyle(fontSize: 16, color: Colors.grey),
+              ),
+              const SizedBox(height: 40),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SearchUserScreen()),
+                  );
+                },
+                icon: const Icon(Icons.search),
+                label: const Text('البحث عن شخص برقم الهاتف والتواصل', style: TextStyle(fontSize: 16)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 4. شاشة البحث عن مستخدم برقم التليفون
+class SearchUserScreen extends StatefulWidget {
+  const SearchUserScreen({super.key});
+
+  @override
+  State<SearchUserScreen> createState() => _SearchUserScreenState();
+}
+
+class _SearchUserScreenState extends State<SearchUserScreen> {
+  final _searchController = TextEditingController();
+  Map<String, dynamic> যন্ত্রResult = {};
+  bool _searched = false;
+  bool _loading = false;
+
+  void _searchByPhone() async {
+    String phone = _searchController.text.trim();
+    if (phone.isEmpty) return;
+
+    setState(() {
+      _loading = true;
+      _searched = false;
+    });
+
+    final query = await FirebaseFirestore.instance
+        .collection('users')
+        .where('phone', isEqualTo: phone)
+        .get();
+
+    setState(() {
+      _loading = false;
+      _searched = true;
+      if (query.docs.isNotEmpty) {
+         যন্ত্রResult = query.docs.first.data();
+      } else {
+         যন্ত্রResult = {};
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUserId = FirebaseAuth.instance.currentUser!.uid;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('بحث برقم الهاتف')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircleAvatar(
-              radius: 50,
-              backgroundImage: userData['photoUrl'] != ''
-                  ? NetworkImage(userData['photoUrl'])
-                  : null,
-              child: userData['photoUrl'] == '' ? const Icon(Icons.person, size: 50) : null,
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'ادخل رقم هاتف الشخص...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.search, color: Colors.blue, size: 30),
+                  onPressed: _searchByPhone,
+                ),
+              ],
             ),
             const SizedBox(height: 20),
-            Text(
-              'الاسم: ${userData['displayName']}',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'اسم المستخدم: @${userData['username']}',
-              style: const TextStyle(fontSize: 16, color: Colors.grey),
-            ),
-            const SizedBox(height: 30),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const UsersListScreen()),
-                );
-              },
-              icon: const Icon(Icons.people),
-              label: const Text('تواصل مع مستخدم آخر (دردشة)'),
-            ),
+            _loading
+                ? const CircularProgressIndicator()
+                : _searched
+                    ? যন্ত্রResult.isEmpty
+                        ? const Text('لم يتم العثور على مستخدم بهذا الرقم', style: TextStyle(color: Colors.red))
+                        : যন্ত্রResult['uid'] == currentUserId
+                            ? const Text('هذا هو رقمك الشخصي!', style: TextStyle(color: Colors.grey))
+                            : Card(
+                                child: ListTile(
+                                  leading: const Icon(Icons.person, size: 40, color: Colors.blue),
+                                  title: Text( যন্ত্রResult['username']),
+                                  subtitle: Text( যন্ত্রResult['phone']),
+                                  trailing: ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ChatScreen(
+                                            peerUid:  যন্ত্রResult['uid'],
+                                            peerUsername:  যন্ত্রResult['username'],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: const Text('مراسلة'),
+                                  ),
+                                ),
+                              )
+                    : const SizedBox.shrink(),
           ],
         ),
       ),
@@ -289,65 +344,7 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-/// شاشة عرض المستخدمين الآخرين للتواصل معهم
-class UsersListScreen extends StatelessWidget {
-  const UsersListScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final currentUserId = FirebaseAuth.instance.currentUser!.uid;
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('المستخدمون المتاحون للتواصل')),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('users').snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          final usersDocs = snapshot.data!.docs;
-
-          return ListView.builder(
-            itemCount: usersDocs.length,
-            itemBuilder: (context, index) {
-              final userData = usersDocs[index].data() as Map<String, dynamic>;
-
-              if (userData['uid'] == currentUserId) {
-                return const SizedBox.shrink();
-              }
-
-              return ListTile(
-                leading: CircleAvatar(
-                  backgroundImage: userData['photoUrl'] != ''
-                      ? NetworkImage(userData['photoUrl'])
-                      : null,
-                  child: userData['photoUrl'] == '' ? const Icon(Icons.person) : null,
-                ),
-                title: Text(userData['displayName'] ?? ''),
-                subtitle: Text('@${userData['username']}'),
-                trailing: const Icon(Icons.chat_bubble_outline, color: Colors.blue),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ChatScreen(
-                        peerUid: userData['uid'],
-                        peerUsername: userData['username'],
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// شاشة الدردشة الثنائية المباشرة بين مستخدمين
+/// 5. شاشة الدردشة الثنائية اللحظية بين الشخصين
 class ChatScreen extends StatefulWidget {
   final String peerUid;
   final String peerUsername;
